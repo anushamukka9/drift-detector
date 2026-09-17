@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drift-detector"
+version = "1.0.0"
+description = "ML drift detection: data drift (PSI, KS, chi-square), concept drift (DDM, ADWIN, Page-Hinkley), and schema drift — with CLI for CSV comparison"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+    { name = "Anusha Mukka", email = "hello@anushamukka.com" },
+]
+keywords = ["mlops", "drift-detection", "data-drift", "concept-drift", "monitoring"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.22",
+    "scipy>=1.9",
+]
+
+[project.urls]
+Homepage = "https://anushamukka.com"
+Repository = "https://github.com/anushamukka9/drift-detector"
+
+[project.scripts]
+drift-detector = "drift_detector.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
