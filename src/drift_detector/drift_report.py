@@ -121,3 +121,71 @@ def report_to_json(report: DriftReport, path: str | None = None) -> str:
         with open(path, "w") as fh:
             fh.write(text)
     return text
+
+
+def report_to_markdown(report: DriftReport, path: str | None = None) -> str:
+    """Render a report as human-readable Markdown; optionally write to ``path``."""
+    lines = ["# Drift Report", ""]
+    lines.append(f"**Verdict: {report.verdict}**")
+    lines.append("")
+    lines.append(f"Generated: {report.generated_at}")
+    lines.append(
+        f"Reference rows: {report.reference_rows} · "
+        f"Current rows: {report.current_rows}"
+    )
+    lines.append("")
+
+    lines.append("## Schema drift")
+    lines.append("")
+    schema = report.schema
+    if not schema.drifted:
+        lines.append("No schema changes detected.")
+    else:
+        if schema.columns_added:
+            lines.append(f"Columns added: {', '.join(schema.columns_added)}")
+        if schema.columns_removed:
+            lines.append(f"Columns removed: {', '.join(schema.columns_removed)}")
+        for col, change in schema.dtype_changed.items():
+            lines.append(
+                f"Dtype changed: `{col}` "
+                f"{change['reference']} -> {change['current']}"
+            )
+        for col, shift in schema.null_rate_shift.items():
+            lines.append(
+                f"Null-rate shift: `{col}` "
+                f"{shift['reference']:.3f} -> {shift['current']:.3f} "
+                f"(delta {shift['delta']:+.3f})"
+            )
+    lines.append("")
+
+    lines.append("## Per-feature drift")
+    lines.append("")
+    if not report.features:
+        lines.append("No shared features to compare.")
+    else:
+        lines.append("| Feature | Kind | Test | Score | p-value | Severity | Drifted |")
+        lines.append("| --- | --- | --- | ---: | ---: | --- | --- |")
+        for f in report.features:
+            p = f"{f.p_value:.4f}" if f.p_value is not None else "n/a"
+            mark = "yes" if f.drifted else "no"
+            lines.append(
+                f"| `{f.feature}` | {f.kind} | {f.test} | {f.score:.4f} "
+                f"| {p} | {f.severity} | {mark} |"
+            )
+    lines.append("")
+
+    if report.drifted_features:
+        lines.append("## Drifted features")
+        lines.append("")
+        for f in report.drifted_features:
+            lines.append(
+                f"- **{f.feature}** ({f.kind}, {f.test}): "
+                f"score={f.score:.4f}, severity={f.severity}"
+            )
+        lines.append("")
+
+    text = "\n".join(lines)
+    if path:
+        with open(path, "w") as fh:
+            fh.write(text)
+    return text
