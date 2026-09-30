@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "drift-detector"
-version = "1.0.0"
-description = "ML drift detection: data drift (PSI, KS, chi-square), concept drift (DDM, ADWIN, Page-Hinkley), and schema drift — with CLI for CSV comparison"
+version = "1.1.0"
+description = "ML drift detection: data drift (PSI, KS, chi-square), concept drift (DDM, ADWIN, Page-Hinkley), schema drift, and a streaming batch monitor — with CLI for CSV comparison"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
