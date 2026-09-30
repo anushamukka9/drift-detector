@@ -7,10 +7,12 @@ import numpy as np
 import pytest
 
 from drift_detector import (
+    BatchDriftResult,
     DriftConfig,
     DDMDetector,
     PageHinkleyDetector,
     AdwinDetector,
+    StreamingDriftMonitor,
     chi_square_drift,
     compare_schemas,
     detect_drift,
@@ -20,6 +22,7 @@ from drift_detector import (
     per_feature_drift,
     psi,
     report_to_json,
+    report_to_markdown,
 )
 from drift_detector.cli import main as cli_main
 
@@ -187,3 +190,133 @@ def test_cli_compare_writes_json(tmp_path, capsys):
     payload = json.loads(out.read_text())
     assert payload["verdict"] == "DRIFT DETECTED"
     assert "drifted_features" in payload
+
+
+# ---------------------------------------------------------------- streaming
+def _reference_columns(n=4000):
+    return {
+        "age": rng.normal(35, 5, n),
+        "city": rng.choice(["x", "y"], n, p=[0.6, 0.4]),
+    }
+
+
+def test_streaming_monitor_stable_batches_stay_clean():
+    monitor = StreamingDriftMonitor(DriftConfig()).fit(_reference_columns())
+    assert monitor.fitted
+    for i in range(3):
+        batch = {
+            "age": rng.normal(35, 5, 500),
+            "city": rng.choice(["x", "y"], 500, p=[0.6, 0.4]),
+        }
+        result = monitor.update(batch, batch_id=f"b{i}")
+        assert result.verdict == "NO SIGNIFICANT DRIFT"
+        assert not result.alerted
+    assert len(monitor.history) == 3
+    assert monitor.alerts() == []
+    summary = monitor.summary()
+    assert [row["batch_id"] for row in summary] == ["b0", "b1", "b2"]
+
+
+def test_streaming_monitor_flags_shifted_batch():
+    monitor = StreamingDriftMonitor(DriftConfig()).fit(_reference_columns())
+    shifted = {
+        "age": rng.normal(60, 5, 500),
+        "city": rng.choice(["x", "y"], 500, p=[0.6, 0.4]),
+    }
+    result = monitor.update(shifted, batch_id="shifted")
+    assert isinstance(result, BatchDriftResult)
+    assert result.verdict == "DRIFT DETECTED"
+    assert result.alerted
+    drifted = {f.feature for f in result.drifted_features}
+    assert "age" in drifted and "city" not in drifted
+    assert len(monitor.alerts()) == 1
+    payload = result.to_dict()
+    assert payload["verdict"] == "DRIFT DETECTED"
+
+
+def test_streaming_monitor_flags_shifted_categorical():
+    monitor = StreamingDriftMonitor(DriftConfig()).fit(_reference_columns())
+    batch = {
+        "age": rng.normal(35, 5, 500),
+        "city": rng.choice(["x", "y"], 500, p=[0.1, 0.9]),
+    }
+    result = monitor.update(batch)
+    assert result.verdict == "DRIFT DETECTED"
+    assert {f.feature for f in result.drifted_features} == {"city"}
+
+
+def test_streaming_monitor_uses_frozen_reference_breakpoints():
+    # Two monitors fit on different references must score the same batch
+    # differently: breakpoints are frozen at fit time, not recomputed.
+    ref_a = {"x": rng.normal(0, 1, 4000)}
+    ref_b = {"x": rng.normal(10, 1, 4000)}
+    batch = {"x": rng.normal(10, 1, 500)}
+    score_a = StreamingDriftMonitor().fit(ref_a).update(batch).features[0].score
+    score_b = StreamingDriftMonitor().fit(ref_b).update(batch).features[0].score
+    assert score_a > 0.25  # batch far from reference A
+    assert score_b < 0.25  # batch matches reference B
+
+
+def test_streaming_monitor_requires_fit_first():
+    monitor = StreamingDriftMonitor()
+    with pytest.raises(ValueError):
+        monitor.update({"x": np.array([1.0])})
+
+
+def test_streaming_monitor_rejects_missing_features():
+    monitor = StreamingDriftMonitor().fit(_reference_columns())
+    with pytest.raises(ValueError):
+        monitor.update({"age": rng.normal(35, 5, 100)})
+
+
+def test_streaming_monitor_rejects_empty_batch():
+    monitor = StreamingDriftMonitor().fit(_reference_columns())
+    with pytest.raises(ValueError):
+        monitor.update({"age": np.array([]), "city": np.array([])})
+
+
+# ---------------------------------------------------------------- markdown report
+def test_report_to_markdown_contains_verdict_and_features(tmp_path):
+    ref_path, cur_path = _csvs(tmp_path)
+    report = detect_drift_csv(ref_path, cur_path, DriftConfig())
+    md = report_to_markdown(report)
+    assert "# Drift Report" in md
+    assert "DRIFT DETECTED" in md
+    assert "`age`" in md
+    assert "## Per-feature drift" in md
+    out = tmp_path / "report.md"
+    report_to_markdown(report, str(out))
+    assert out.read_text() == md
+
+
+def test_report_to_markdown_clean_report(tmp_path):
+    ref = tmp_path / "r.csv"
+    rows = "\n".join(f"{a}" for a in rng.normal(35, 5, 500))
+    ref.write_text("age\n" + rows)
+    cur = tmp_path / "c.csv"
+    cur.write_text("age\n" + rows)
+    report = detect_drift_csv(str(ref), str(cur), DriftConfig())
+    md = report_to_markdown(report)
+    assert "NO SIGNIFICANT DRIFT" in md
+    assert "No schema changes detected." in md
+
+
+def test_streaming_monitor_ignores_null_rate_shifts():
+    # Nulls are schema drift's job: a null-rate shift alone must not flag
+    # the value distribution as drifted.
+    ref_vals = rng.normal(35, 5, 4000)
+    ref_vals[rng.random(4000) < 0.05] = np.nan
+    batch_vals = rng.normal(35, 5, 1000)
+    batch_vals[rng.random(1000) < 0.30] = np.nan
+    monitor = StreamingDriftMonitor(DriftConfig()).fit({"x": ref_vals})
+    result = monitor.update({"x": batch_vals})
+    assert result.verdict == "NO SIGNIFICANT DRIFT"
+
+
+def test_psi_total_shift_returns_inf_not_nan():
+    import math
+
+    ref = rng.normal(0, 1, 2000)
+    cur = rng.normal(100, 1, 2000)  # entirely outside the reference range
+    score = psi(ref, cur)
+    assert math.isinf(score) and score > 0
