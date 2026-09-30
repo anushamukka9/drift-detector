@@ -3,6 +3,7 @@
 Data drift   : PSI, Kolmogorov–Smirnov, chi-square per-feature tests.
 Concept drift: DDM, ADWIN-style sliding window, Page–Hinkley error monitors.
 Schema drift : column/dtype comparison between reference and current frames.
+Streaming    : fit-once, score-batches monitor for production data.
 """
 
 from drift_detector.data_drift import (
@@ -25,6 +26,11 @@ from drift_detector.drift_report import (
     detect_drift,
     detect_drift_csv,
     report_to_json,
+    report_to_markdown,
+)
+from drift_detector.streaming import (
+    BatchDriftResult,
+    StreamingDriftMonitor,
 )
 
 __all__ = [
@@ -44,7 +50,10 @@ __all__ = [
     "detect_drift",
     "detect_drift_csv",
     "report_to_json",
+    "report_to_markdown",
+    "BatchDriftResult",
+    "StreamingDriftMonitor",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Anusha Mukka"
