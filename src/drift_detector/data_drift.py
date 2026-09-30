@@ -26,6 +26,30 @@ def _is_categorical(values: np.ndarray) -> bool:
     return values.dtype.kind in ("U", "S", "O")
 
 
+def _quantile_breakpoints(expected: np.ndarray, buckets: int) -> np.ndarray:
+    """Quantile cut-points of the reference distribution for PSI bucketing."""
+    quantiles = np.linspace(0, 100, buckets + 1)
+    return np.unique(np.percentile(expected, quantiles))
+
+
+def _psi_from_counts(
+    exp_counts: np.ndarray, act_counts: np.ndarray, epsilon: float = 1e-6
+) -> float:
+    """PSI from two aligned bucket-count histograms."""
+    if exp_counts.sum() == 0 or act_counts.sum() == 0:
+        # No overlap at all between the two bucketings: total distribution shift.
+        return float("inf")
+    exp_perc = np.clip(exp_counts / exp_counts.sum(), epsilon, None)
+    act_perc = np.clip(act_counts / act_counts.sum(), epsilon, None)
+    return float(np.sum((act_perc - exp_perc) * np.log(act_perc / exp_perc)))
+
+
+def _categorical_counts(values: np.ndarray) -> Dict[str, int]:
+    """Value counts of a categorical array as a plain dict."""
+    unique, counts = np.unique(_to_1d(np.asarray(values, dtype=str)), return_counts=True)
+    return {str(k): int(v) for k, v in zip(unique, counts)}
+
+
 def psi(expected: Sequence, actual: Sequence, buckets: int = 10,
         epsilon: float = 1e-6) -> float:
     """Population Stability Index between an expected and an actual distribution.
@@ -40,21 +64,13 @@ def psi(expected: Sequence, actual: Sequence, buckets: int = 10,
     if np.all(exp == exp[0]) and np.all(act == act[0]) and exp[0] == act[0]:
         return 0.0
 
-    quantiles = np.linspace(0, 100, buckets + 1)
-    breakpoints = np.unique(np.percentile(exp, quantiles))
+    breakpoints = _quantile_breakpoints(exp, buckets)
     if breakpoints.size < 2:
         return 0.0  # constant feature in the reference sample
 
     exp_counts, _ = np.histogram(exp, bins=breakpoints)
     act_counts, _ = np.histogram(act, bins=breakpoints)
-
-    exp_perc = exp_counts / exp_counts.sum()
-    act_perc = act_counts / act_counts.sum()
-
-    exp_perc = np.clip(exp_perc, epsilon, None)
-    act_perc = np.clip(act_perc, epsilon, None)
-
-    return float(np.sum((act_perc - exp_perc) * np.log(act_perc / exp_perc)))
+    return _psi_from_counts(exp_counts, act_counts, epsilon)
 
 
 def ks_drift(reference: Sequence, current: Sequence) -> Tuple[float, float]:
@@ -69,6 +85,21 @@ def ks_drift(reference: Sequence, current: Sequence) -> Tuple[float, float]:
     return float(result.statistic), float(result.pvalue)
 
 
+def _chi_square_from_counts(
+    ref_counts: Dict[str, int], cur_counts: Dict[str, int]
+) -> Tuple[float, float]:
+    """Chi-square test of independence from two aligned value-count dicts."""
+    categories = sorted(set(ref_counts) | set(cur_counts))
+    if len(categories) == 1:
+        return 0.0, 1.0
+    table = np.array([
+        [ref_counts.get(c, 0) for c in categories],
+        [cur_counts.get(c, 0) for c in categories],
+    ], dtype=float)
+    statistic, pvalue, _, _ = stats.chi2_contingency(table)
+    return float(statistic), float(pvalue)
+
+
 def chi_square_drift(reference: Sequence, current: Sequence) -> Tuple[float, float]:
     """Chi-square test of independence on categorical value counts.
 
@@ -79,17 +110,7 @@ def chi_square_drift(reference: Sequence, current: Sequence) -> Tuple[float, flo
     cur = _to_1d(np.asarray(current, dtype=str))
     if ref.size == 0 or cur.size == 0:
         raise ValueError("chi-square test requires non-empty inputs")
-
-    categories = sorted(set(ref) | set(cur))
-    if len(categories) == 1:
-        return 0.0, 1.0
-
-    table = np.array([
-        [np.count_nonzero(ref == c) for c in categories],
-        [np.count_nonzero(cur == c) for c in categories],
-    ], dtype=float)
-    statistic, pvalue, _, _ = stats.chi2_contingency(table)
-    return float(statistic), float(pvalue)
+    return _chi_square_from_counts(_categorical_counts(ref), _categorical_counts(cur))
 
 
 @dataclass
