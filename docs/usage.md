@@ -69,12 +69,13 @@ print(result.columns_added, result.columns_removed, result.dtype_changed)
 ## 4. The full report and the CLI
 
 ```python
-from drift_detector import DriftConfig, detect_drift_csv, report_to_json
+from drift_detector import DriftConfig, detect_drift_csv, report_to_json, report_to_markdown
 
 config = DriftConfig(psi_threshold=0.25, p_value_threshold=0.05,
                      null_rate_threshold=0.10, fail_on="high")
 report = detect_drift_csv("reference.csv", "current.csv", config)
 report_to_json(report, "drift-report.json")
+print(report_to_markdown(report, "drift-report.md"))
 print(report.verdict)
 ```
 
@@ -86,9 +87,41 @@ drift-detector compare reference.csv current.csv \
 
 The JSON report contains the verdict, per-feature scores and severities, the
 schema diff, row counts, and the config used — everything an incident review or
-a model-monitoring dashboard needs.
+a model-monitoring dashboard needs. The Markdown report renders the same
+content as readable tables for PRs and docs.
 
-## 5. Putting it in a pipeline
+## 5. Streaming: score production batches as they arrive
+
+`StreamingDriftMonitor` fits once on reference data — freezing the PSI quantile
+breakpoints and categorical value counts — then scores each production batch
+against that frozen profile. Batches are O(batch size) in memory; the full
+reference sample is never retained. Nulls are ignored by the value tests
+(null-rate shifts belong to schema drift).
+
+```python
+from drift_detector import StreamingDriftMonitor, DriftConfig
+
+monitor = StreamingDriftMonitor(DriftConfig(psi_threshold=0.2))
+monitor.fit(reference_columns)          # {feature: np.ndarray}
+
+for batch_id, batch in serving_batches():
+    result = monitor.update(batch, batch_id=batch_id)
+    print(batch_id, result.verdict,
+          [f.feature for f in result.drifted_features])
+
+print(monitor.summary())   # one row per batch: id, verdict, drifted features
+print(monitor.alerts())    # only the batches that flipped to DRIFT DETECTED
+```
+
+Notes:
+
+- The KS test is not used in streaming mode because it needs the raw reference
+  sample; PSI decides numeric verdicts there.
+- A batch falling entirely outside the reference range scores PSI = infinity:
+  total shift, always drifted.
+- Call `monitor.fit(new_reference)` after retraining to re-baseline.
+
+## 6. Putting it in a pipeline
 
 A typical nightly job:
 
